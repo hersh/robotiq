@@ -36,6 +36,13 @@
 
 from range_converter import RangeConverter
 
+def clamp_to_byte(value):
+    if value < 0:
+        return 0
+    if value > 255:
+        return 255
+    return int(value)
+
 class CModel85Conversions:
     def __init__(self):
         # These values were taken from the Robotiq C-model 85 instruction manual at
@@ -43,28 +50,28 @@ class CModel85Conversions:
 
         # Distance is finger separation in meters, which is in the
         # opposite direction from the command values.
-        self.dist_ = RangeConverter(0, 87, 230, 13)
+        self.dist_ = RangeConverter(0.0, 87.0, 230.0, 13.0)
 
         # Speed is in meters/second
-        self.speed_ = RangeConverter(0.013, 0.100, 0, 255)
+        self.speed_ = RangeConverter(0.013, 0.100, 0.0, 255.0)
 
         # Force is in Newtons
-        self.force_ = RangeConverter(30, 100, 0, 255)
+        self.force_ = RangeConverter(30.0, 100.0, 0.0, 255.0)
 
     def dist_to_command(self, distance):
-        return int(self.dist_.r1_to_r2(distance))
+        return clamp_to_byte(self.dist_.r1_to_r2(distance))
 
     def command_to_dist(self, command):
         return self.dist_.r2_to_r1(command)
         
     def speed_to_command(self, speed):
-        return int(self.speed_.r1_to_r2(speed))
+        return clamp_to_byte(self.speed_.r1_to_r2(speed))
 
     def command_to_speed(self, command):
         return self.speed_.r2_to_r1(command)
         
     def force_to_command(self, force):
-        return int(self.force_.r1_to_r2(force))
+        return clamp_to_byte(self.force_.r1_to_r2(force))
 
     def command_to_force(self, command):
         return self.force_.r2_to_r1(command)

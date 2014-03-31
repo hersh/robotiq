@@ -44,9 +44,9 @@ class RangeConverter:
         self.r2_range_ = self.r2_max_ - self.r2_min_
 
     def r1_to_r2(self, r1_val):
-        ratio = (r1_val - self.r1_min_) / self.r1_range_
+        ratio = (r1_val - self.r1_min_) / float(self.r1_range_)
         return ratio * self.r2_range_ + self.r2_min_
 
     def r2_to_r1(self, r2_val):
-        ratio = (r2_val - self.r2_min_) / self.r2_range_
+        ratio = (r2_val - self.r2_min_) / float(self.r2_range_)
         return ratio * self.r1_range_ + self.r1_min_

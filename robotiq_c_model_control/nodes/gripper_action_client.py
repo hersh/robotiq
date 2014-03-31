@@ -53,9 +53,11 @@ def gripper_client(command):
     # (FibonacciAction) to the constructor.
     client = actionlib.SimpleActionClient('CModelActionServer', control_msgs.msg.GripperCommandAction)
 
+    print "waiting for server..."
     # Waits until the action server has started up and started
     # listening for goals.
     client.wait_for_server()
+    print "done waiting for server."
 
     # Creates a goal to send to the action server.
     goal = control_msgs.msg.GripperCommandGoal()
@@ -67,6 +69,9 @@ def gripper_client(command):
         goal.command.position = 85 / 2
     goal.command.max_effort = 1
 
+    real_pos = goal.command.position
+
+    goal.command.position = real_pos
     # Sends the goal to the action server.
     client.send_goal(goal)
 

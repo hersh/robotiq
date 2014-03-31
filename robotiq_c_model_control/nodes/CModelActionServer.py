@@ -37,37 +37,37 @@
 
 """@package docstring
 ROS node providing an actionlib action server for controling a Robotiq
-C-Model gripper using the Modbus TCP protocol.
+C-Model gripper using the CModelTcpNode.py driver node.
 
-The script takes as an argument the IP address of the gripper. It
-initializes a baseCModel object and adds a comModbusTcp client to it.
-It implements an actionlib action server using the "GripperCommand"
-action defined in control_msgs/action/GripperCommand.action.
+The script takes no arguments.  It subscribes to CModelRobotInput to
+receive gripper status and publishes to CModelRobotOutput to send
+commands. It implements an actionlib action server using the
+"GripperCommand" action defined in
+control_msgs/action/GripperCommand.action.
 """
 
 import roslib; roslib.load_manifest('robotiq_c_model_control')
 roslib.load_manifest('robotiq_modbus_tcp')
-import rospy
-import robotiq_c_model_control.baseCModel
-import robotiq_modbus_tcp.comModbusTcp
-import os, sys
-from robotiq_c_model_control.msg import _CModel_robot_input  as inputMsg
-from robotiq_c_model_control.msg import _CModel_robot_output as outputMsg
 import actionlib
 import control_msgs.msg
+import rospy
+import threading
 from robotiq_c_model_control.c_model_85_conversions import CModel85Conversions
+from robotiq_c_model_control.msg import _CModel_robot_input  as inputMsg
+from robotiq_c_model_control.msg import _CModel_robot_output as outputMsg
 
 class CModelActionServer(object):
     feedback_ = control_msgs.msg.GripperCommandFeedback()
     result_   = control_msgs.msg.GripperCommandResult()
     conversions_ = CModel85Conversions()
 
-    def __init__(self, action_name, gripper_ip_address):
+    def __init__(self, action_name):
 
-        self.gripper_ = robotiq_c_model_control.baseCModel.robotiqBaseCModel()
-        self.gripper_.client = robotiq_modbus_tcp.comModbusTcp.communication()
+        self.gripper_status_ = None
+        self.status_lock_ = threading.Lock()
+        rospy.Subscriber('CModelRobotInput', inputMsg.CModel_robot_input, self.receiveGripperStatus)    
 
-        self.gripper_.client.connectToDevice(gripper_ip_address)
+        self.pub_ = rospy.Publisher('CModelRobotOutput', outputMsg.CModel_robot_output)
 
         self.activateGripper()
 
@@ -78,27 +78,34 @@ class CModelActionServer(object):
                                                            auto_start = False)
         self.action_server_.start()
 
+    def getStatus(self):
+        self.status_lock_.acquire()
+        status = self.gripper_status_
+        self.status_lock_.release()
+        return status
+
+    def receiveGripperStatus(self, gripper_status_msg):
+        self.status_lock_.acquire()
+        self.gripper_status_ = gripper_status_msg
+        self.status_lock_.release()
+
     def activateGripper(self):
         # When the gripper is first activated, it goes through a
         # calibration routine where it opens and closes fully.  This
-        # function triggers this and waits for it to finish.
+        # function waits for it to finish.
         msg_to_gripper = outputMsg.CModel_robot_output()
         msg_to_gripper.rACT = 1 # 1 = activate, 0 = reset
         msg_to_gripper.rGTO = 1 # 1 = go to position, 0 = stop
         msg_to_gripper.rATR = 0 # 1 = automatic release in case of e-stop, 0 = normal
         msg_to_gripper.rPR = 0 # all the way open
-        msg_to_gripper.rSP = 255 # maximum speed
-        msg_to_gripper.rFR = 0 # minimum force
+        msg_to_gripper.rSP = 255 # always use maximum speed (for now)
+        msg_to_gripper.rFR = 0 # minimum force for activation
 
-        gripper_status = self.gripper_.getStatus()
-
-        print("Gripper activating...")
-
-        while gripper_status.gSTA != 3:
-            self.gripper_.refreshCommand(msg_to_gripper)
-            self.gripper_.sendCommand()
-            gripper_status = self.gripper_.getStatus()
-
+        gripper_status = self.getStatus()
+        while gripper_status == None or gripper_status.gSTA != 3:
+            self.pub_.publish(msg_to_gripper)
+            rospy.sleep(0.05)
+            gripper_status = self.getStatus()
         print("Gripper activated.")
 
     def execute(self, goal):
@@ -108,31 +115,28 @@ class CModelActionServer(object):
         msg_to_gripper.rACT = 1 # 1 = activate, 0 = reset
         msg_to_gripper.rGTO = 1 # 1 = go to position, 0 = stop
         msg_to_gripper.rATR = 0 # 1 = automatic release in case of e-stop, 0 = normal
-        msg_to_gripper.rPR = self.conversions_.dist_to_command(command.position)
+        msg_to_gripper.rPR = int(self.conversions_.dist_to_command(command.position))
         msg_to_gripper.rSP = 255 # always use maximum speed (for now)
-        msg_to_gripper.rFR = self.conversions_.force_to_command(command.max_effort)
+        msg_to_gripper.rFR = int(self.conversions_.force_to_command(command.max_effort))
 
-        self.gripper_.refreshCommand(msg_to_gripper)
-        self.gripper_.sendCommand()
+        self.pub_.publish(msg_to_gripper)
 
-        rospy.sleep(0.05) # why?
-
-        gripper_status = self.gripper_.getStatus()
+        gripper_status = self.getStatus()
 
         while (not rospy.is_shutdown() and
-               gripper_status.gFLT == 0 and # no fault
-               gripper_status.gOBJ != 2 and # haven't stopped due to object
-               gripper_status.gOBJ != 3): # haven't gotten to requested position yet
+               (gripper_status == None or # keep looping until we get a real status
+                (gripper_status.gFLT == 0 and # no fault
+                 not (gripper_status.gOBJ == 1 or gripper_status.gOBJ == 2 or # haven't stopped due to object - OR
+                      (gripper_status.gPO == msg_to_gripper.rPR and # got to the target position and 
+                       gripper_status.gOBJ == 3))))): # arrived-at-goal status is set.
 
-            rospy.sleep(0.05) # why?
+            rospy.sleep(0.05)
 
-            self.gripper_.refreshCommand(msg_to_gripper)
-            self.gripper_.sendCommand()
+            gripper_status = self.getStatus()
 
-            rospy.sleep(0.05) # why?
-
-            gripper_status = self.gripper_.getStatus()
-
+        if rospy.is_shutdown():
+            return
+               
         # print "status at end of loop:"
         # print repr(gripper_status)
 
@@ -145,14 +149,12 @@ class CModelActionServer(object):
         if gripper_status.gOBJ == 3:
             self.action_server_.set_succeeded(self.result_)
         else:
-            self.action_server_.set_failed(self.result_)
+            self.action_server_.set_aborted(self.result_)
 
 if __name__ == '__main__':
     try:
         rospy.init_node('CModelActionServer')
-        if len(sys.argv) < 2:
-            print("USAGE: CModelActionServer.py <IP-addr-of-gripper>")
-        else:
-            CModelActionServer(rospy.get_name(), sys.argv[1])
-            rospy.spin()
-    except rospy.ROSInterruptException: pass
+        CModelActionServer(rospy.get_name())
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        pass
