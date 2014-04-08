@@ -77,6 +77,7 @@ class CModelActionServer(object):
                                                            execute_cb = self.execute,
                                                            auto_start = False)
         self.action_server_.start()
+        rospy.loginfo("Gripper action server started.")
 
     def getStatus(self):
         self.status_lock_.acquire()
@@ -89,7 +90,25 @@ class CModelActionServer(object):
         self.gripper_status_ = gripper_status_msg
         self.status_lock_.release()
 
+    def resetGripper(self):
+        msg_to_gripper = outputMsg.CModel_robot_output()
+        msg_to_gripper.rACT = 0 # 1 = activate, 0 = reset
+        msg_to_gripper.rGTO = 1 # 1 = go to position, 0 = stop
+        msg_to_gripper.rATR = 0 # 1 = automatic release in case of e-stop, 0 = normal
+        msg_to_gripper.rPR = 0 # all the way open
+        msg_to_gripper.rSP = 255 # always use maximum speed (for now)
+        msg_to_gripper.rFR = 0 # minimum force for activation
+
+        gripper_status = self.getStatus()
+        while gripper_status == None or gripper_status.gACT != 0:
+            self.pub_.publish(msg_to_gripper)
+            rospy.sleep(0.05)
+            gripper_status = self.getStatus()
+        print("Gripper reset.")
+
     def activateGripper(self):
+        self.resetGripper()
+
         # When the gripper is first activated, it goes through a
         # calibration routine where it opens and closes fully.  This
         # function waits for it to finish.
@@ -109,6 +128,8 @@ class CModelActionServer(object):
         print("Gripper activated.")
 
     def execute(self, goal):
+        rospy.loginfo("Gripper action goal received.")
+
         command = goal.command
 
         msg_to_gripper = outputMsg.CModel_robot_output()
@@ -127,13 +148,15 @@ class CModelActionServer(object):
                (gripper_status == None or # keep looping until we get a real status
                 (gripper_status.gFLT == 0 and # no fault
                  not (gripper_status.gOBJ == 1 or gripper_status.gOBJ == 2 or # haven't stopped due to object - OR
-                      (gripper_status.gPO == msg_to_gripper.rPR and # got to the target position and 
+                      (#gripper_status.gPO == msg_to_gripper.rPR and # got to the target position and 
                        gripper_status.gOBJ == 3))))): # arrived-at-goal status is set.
 
+            rospy.loginfo("Gripper action execute loop.")
             rospy.sleep(0.05)
 
             gripper_status = self.getStatus()
 
+        rospy.loginfo("Gripper action execute loop complete.")
         if rospy.is_shutdown():
             return
                
@@ -147,8 +170,10 @@ class CModelActionServer(object):
         self.result_.reached_goal = (gripper_status.gOBJ == 3)
 
         if gripper_status.gOBJ == 3:
+            rospy.loginfo("Gripper action execute succeeding.")
             self.action_server_.set_succeeded(self.result_)
         else:
+            rospy.loginfo("Gripper action execute aborting.")
             self.action_server_.set_aborted(self.result_)
 
 if __name__ == '__main__':
